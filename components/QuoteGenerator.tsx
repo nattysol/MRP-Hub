@@ -9,7 +9,7 @@ import SearchableSelect from './SearchableSelect';
 interface QuoteGeneratorProps {
   onBack: () => void;
   autoCreate?: boolean;
-  userName: string; // <--- NEW PROP
+  userName: string;
 }
 
 interface QuoteResult {
@@ -149,25 +149,30 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
     }
   };
 
+  // --- PDF GENERATOR ---
   const handleDownloadPDF = () => {
     if (!selectedRecipe || !results.t1 || !results.t2 || !results.t3) return;
+    
+    // Save record first
     handleSaveQuote();
+
     const doc = new jsPDF();
     const product = products.find(p => p.id === selectedProductId);
     const prodName = product?.name || selectedRecipe.name;
     const today = new Date().toLocaleDateString();
 
+    // 1. Header
     doc.setFillColor(79, 70, 229); 
     doc.rect(0, 0, 210, 30, 'F');
     doc.setFontSize(20);
     doc.setTextColor(255);
     doc.setFont('helvetica', 'bold');
-    doc.text('MANUFACTURING HUB', 14, 18);
+    doc.text('MANUFACTURING QUOTE', 14, 18);
     
-    // Top Right Info
+    // Header Meta
     doc.setFontSize(10);
     doc.text(`Date: ${today}`, 160, 12);
-    doc.text(`By: ${userName}`, 160, 18); // <--- Added User
+    doc.text(`By: ${userName}`, 160, 18);
 
     doc.setTextColor(0);
     doc.setFontSize(14);
@@ -177,9 +182,10 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(100);
-    doc.text(`Client: ${clientName}`, 14, 51); // <--- Added Client
+    doc.text(`Client: ${clientName}`, 14, 51);
     doc.text(`SKU: ${product?.sku || 'N/A'}`, 14, 56);
 
+    // 2. Pricing Table
     autoTable(doc, {
       startY: 70,
       head: [['Order Quantity', 'Unit Price', 'Total Cost', 'Lead Time']],
@@ -191,9 +197,65 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
       theme: 'grid',
       headStyles: { fillColor: [79, 70, 229], halign: 'center' },
     });
+
+    // 3. Packaging Specs
+    const getPkgName = (id: string) => packaging.find(p => p.id === id)?.name || 'Not Selected';
+    
+    // UPDATED: Logic to hide unknown vendors
+    const getPkgVendor = (id: string) => {
+      const v = packaging.find(p => p.id === id)?.vendor;
+      if (!v || v === 'Unknown') return 'Undisclosed, top-tier vendor';
+      return v;
+    };
+
+    let finalY = (doc as any).lastAutoTable.finalY + 15;
+    
+    doc.setFontSize(12);
+    doc.setTextColor(0);
+    doc.setFont('helvetica', 'bold');
+    doc.text("Packaging Specifications", 14, finalY);
+
+    const packData = [
+      ['Container', getPkgName(selectedContainerId), getPkgVendor(selectedContainerId)],
+      ['Closure', getPkgName(selectedClosureId), getPkgVendor(selectedClosureId)],
+      ['Label', getPkgName(selectedLabelId), getPkgVendor(selectedLabelId)],
+      ['Box', getPkgName(selectedBoxId), getPkgVendor(selectedBoxId)],
+    ];
+
+    autoTable(doc, {
+      startY: finalY + 5,
+      head: [['Component', 'Selection', 'Vendor']],
+      body: packData,
+      theme: 'striped',
+      headStyles: { fillColor: [60, 60, 60] },
+      styles: { fontSize: 9 }
+    });
+
+    // 4. Formula Breakdown
+    finalY = (doc as any).lastAutoTable.finalY + 15;
+    
+    doc.setFontSize(12);
+    doc.setTextColor(0);
+    doc.text("Formula Breakdown", 14, finalY);
+
+    const formulaData = selectedRecipe.ingredients.map(ri => {
+      const ing = ingredients.find(i => i.id === ri.ingredient_id);
+      return [ing?.name || 'Unknown', `${ri.percentage.toFixed(2)}%`];
+    });
+
+    autoTable(doc, {
+      startY: finalY + 5,
+      head: [['Ingredient', 'Concentration']],
+      body: formulaData,
+      theme: 'striped',
+      headStyles: { fillColor: [60, 60, 60] },
+      styles: { fontSize: 9 }
+    });
+
     doc.save(`Quote_${prodName}.pdf`);
   };
 
+  // --- VIEW: LIST ---
   if (view === 'list') {
     return (
       <div className="flex-1 flex flex-col bg-background-light dark:bg-background-dark pb-24 min-h-screen">
@@ -221,7 +283,7 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
     );
   }
 
-  // Create View
+  // --- VIEW: CREATE ---
   return (
     <div className="flex-1 flex flex-col bg-background-light dark:bg-background-dark pb-32 min-h-screen">
       <header className="sticky top-0 z-50 flex items-center justify-between bg-white dark:bg-[#111722] p-4 border-b border-slate-200 dark:border-slate-800 shadow-sm shrink-0">
