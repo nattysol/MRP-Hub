@@ -4,7 +4,7 @@ export type UOM = 'kg' | 'lb' | 'gal' | 'l' | 'oz' | 'g' | 'unit';
 export interface Ingredient {
   id: string;
   name: string;
-  vendor: string;
+  vendor?: string;
   purchase_price: number;
   purchase_uom: UOM;
   purchase_size: number;
@@ -100,4 +100,13 @@ export interface UserProfile {
   email: string;
   role: UserRole;
   name: string;
+}
+export interface Ingredient {
+  id: string;
+  name: string;
+  cost_per_gram: number;
+  vendor?: string;
+  location?: string; // <--- NEW FIELD
+  created_at?: any;
+  updated_at?: any;
 }

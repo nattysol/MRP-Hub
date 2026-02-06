@@ -1,3 +1,4 @@
+// ... (imports remain the same)
 import React, { useState, useEffect, useMemo } from 'react';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -6,19 +7,20 @@ import SearchableSelect from './SearchableSelect';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+// ... (props interface remains the same)
 interface FormulatorProps {
   onBack: () => void;
   autoCreate?: boolean;
-  userName: string; // <--- NEW PROP
+  userName: string;
 }
 
 const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName }) => {
+  // ... (All state and effects remain exactly the same as before)
   const [view, setView] = useState<'list' | 'edit'>('list');
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Editor State
   const [name, setName] = useState('');
   const [project, setProject] = useState('');
   const [version, setVersion] = useState('1.0');
@@ -45,6 +47,7 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
     if (autoCreate) handleNew();
   }, [autoCreate]);
 
+  // ... (Keep existing helpers: filteredRecipes, handleEdit, handleNew, handleBatchConfigChange, handleRowChange, addRow, removeRow, ingredientOptions, stats, handleSave)
   const filteredRecipes = useMemo(() => {
     if (!searchTerm) return recipes;
     const lower = searchTerm.toLowerCase();
@@ -137,39 +140,44 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
     }
   };
 
-  // --- UPDATED PDF GENERATION ---
+  // --- UPDATED PDF GENERATION (Confidential + Location) ---
   const handleDownloadPDF = () => {
     const doc = new jsPDF();
     const today = new Date().toLocaleDateString();
     const headerColor: [number, number, number] = [40, 40, 40]; 
 
+    // Header Bar
     doc.setFillColor(...headerColor);
-    doc.rect(0, 0, 210, 35, 'F'); // Made header slightly taller
+    doc.rect(0, 0, 210, 35, 'F');
     doc.setFontSize(20);
     doc.setTextColor(255);
     doc.setFont('helvetica', 'bold');
     doc.text('MANUFACTURING BATCH SHEET', 14, 22);
     
-    // Top Right Meta
+    // Meta
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
     doc.text(`Date: ${today}`, 160, 16);
-    doc.text(`By: ${userName}`, 160, 22); // <--- Added User
+    doc.text(`By: ${userName}`, 160, 22);
 
-    doc.setTextColor(0);
+    // CONFIDENTIAL STAMP
+    doc.setTextColor(220, 50, 50); // Red
     doc.setFontSize(14);
     doc.setFont('helvetica', 'bold');
+    doc.text('CONFIDENTIAL', 160, 30);
+
+    // Document Body
+    doc.setTextColor(0);
+    doc.setFontSize(14);
     doc.text(`Product: ${name}`, 14, 50);
 
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(80);
     
-    // Identity Block
     doc.text(`Version: ${version}`, 14, 56);
-    doc.text(`Client: ${project || 'Internal'}`, 14, 62); // <--- Added Client
+    doc.text(`Client: ${project || 'Internal'}`, 14, 62);
     
-    // Production Block
     doc.text(`Target: ${unitCount.toLocaleString()} units @ ${unitWeight}g`, 14, 72);
     
     doc.setFontSize(14);
@@ -177,20 +185,38 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
     doc.setFont('helvetica', 'bold');
     doc.text(`Batch Size: ${(batchSize/1000).toFixed(2)} kg`, 160, 50);
 
+    // TABLE DATA (Now includes Location)
     const tableData = rows.map((r, i) => {
       const ing = ingredients.find(ing => ing.id === r.ingredient_id);
       const weightG = r.weight_kg * 1000;
-      return [ (i + 1).toString(), ing?.name || 'Unknown', `${weightG.toFixed(2)} g`, `${r.percentage.toFixed(2)} %`, '___' ];
+      // Location Fallback
+      const loc = ing?.location || '-';
+      
+      return [ 
+        (i + 1).toString(), 
+        ing?.name || 'Unknown', 
+        loc, // <--- New Column Data
+        `${weightG.toFixed(2)} g`, 
+        `${r.percentage.toFixed(2)} %`, 
+        '___' 
+      ];
     });
 
     autoTable(doc, {
       startY: 80,
-      head: [['#', 'Ingredient Name', 'Weight (g)', 'Percent', 'Verify']],
+      head: [['#', 'Ingredient Name', 'Location', 'Weight (g)', 'Percent', 'Verify']], // <--- New Column Header
       body: tableData,
       theme: 'grid',
       headStyles: { fillColor: headerColor, halign: 'left' },
       styles: { cellPadding: 4, fontSize: 10 },
-      columnStyles: { 0: { cellWidth: 15, halign: 'center' }, 2: { halign: 'right', fontStyle: 'bold' }, 3: { halign: 'right' }, 4: { cellWidth: 30, halign: 'center' } }
+      // Updated column styles to fit Location
+      columnStyles: { 
+        0: { cellWidth: 10, halign: 'center' }, 
+        2: { cellWidth: 30, fontStyle: 'italic', textColor: 100 }, // Location column style
+        3: { halign: 'right', fontStyle: 'bold' }, 
+        4: { halign: 'right' }, 
+        5: { cellWidth: 20, halign: 'center' } 
+      }
     });
     
     const finalY = (doc as any).lastAutoTable.finalY + 20;
@@ -200,6 +226,7 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
     doc.save(`BatchRecord_${name}_v${version}.pdf`);
   };
 
+  // --- RENDER (No changes below this line, just standard copy/paste of previous Formulator logic) ---
   if (view === 'list') {
     return (
       <div className="flex-1 flex flex-col bg-background-light dark:bg-background-dark pb-24 h-screen">
