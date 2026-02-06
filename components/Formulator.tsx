@@ -1,4 +1,3 @@
-// ... (imports remain the same)
 import React, { useState, useEffect, useMemo } from 'react';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -7,7 +6,6 @@ import SearchableSelect from './SearchableSelect';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-// ... (props interface remains the same)
 interface FormulatorProps {
   onBack: () => void;
   autoCreate?: boolean;
@@ -15,12 +13,15 @@ interface FormulatorProps {
 }
 
 const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName }) => {
-  // ... (All state and effects remain exactly the same as before)
   const [view, setView] = useState<'list' | 'edit'>('list');
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // Stacking State
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
 
+  // Editor State
   const [name, setName] = useState('');
   const [project, setProject] = useState('');
   const [version, setVersion] = useState('1.0');
@@ -47,13 +48,32 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
     if (autoCreate) handleNew();
   }, [autoCreate]);
 
-  // ... (Keep existing helpers: filteredRecipes, handleEdit, handleNew, handleBatchConfigChange, handleRowChange, addRow, removeRow, ingredientOptions, stats, handleSave)
-  const filteredRecipes = useMemo(() => {
-    if (!searchTerm) return recipes;
-    const lower = searchTerm.toLowerCase();
-    return recipes.filter(r => r.name.toLowerCase().includes(lower) || (r.project || '').toLowerCase().includes(lower));
+  // 1. Group Logic: Group recipes by Name, then sort by Version Descending
+  const groupedRecipes = useMemo(() => {
+    const groups: { [key: string]: Recipe[] } = {};
+    
+    // Filter first
+    const filtered = recipes.filter(r => {
+      if (!searchTerm) return true;
+      const lower = searchTerm.toLowerCase();
+      return r.name.toLowerCase().includes(lower) || (r.project || '').toLowerCase().includes(lower);
+    });
+
+    // Group
+    filtered.forEach(r => {
+      if (!groups[r.name]) groups[r.name] = [];
+      groups[r.name].push(r);
+    });
+
+    // Sort versions within groups (highest number first)
+    Object.keys(groups).forEach(key => {
+      groups[key].sort((a, b) => parseFloat(b.version) - parseFloat(a.version));
+    });
+
+    return groups;
   }, [recipes, searchTerm]);
 
+  // Editor Handlers
   const handleEdit = (original: Recipe) => {
     setName(original.name);
     setProject(original.project);
@@ -132,6 +152,7 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
       });
       alert(`Saved ${name} v${version}`);
       setView('list');
+      setExpandedGroup(null); // Reset view
     } catch (e) {
       console.error(e);
       alert("Error saving.");
@@ -140,13 +161,11 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
     }
   };
 
-  // --- UPDATED PDF GENERATION (Confidential + Location) ---
   const handleDownloadPDF = () => {
     const doc = new jsPDF();
     const today = new Date().toLocaleDateString();
     const headerColor: [number, number, number] = [40, 40, 40]; 
 
-    // Header Bar
     doc.setFillColor(...headerColor);
     doc.rect(0, 0, 210, 35, 'F');
     doc.setFontSize(20);
@@ -154,19 +173,16 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
     doc.setFont('helvetica', 'bold');
     doc.text('MANUFACTURING BATCH SHEET', 14, 22);
     
-    // Meta
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
     doc.text(`Date: ${today}`, 160, 16);
     doc.text(`By: ${userName}`, 160, 22);
 
-    // CONFIDENTIAL STAMP
-    doc.setTextColor(220, 50, 50); // Red
+    doc.setTextColor(220, 50, 50);
     doc.setFontSize(14);
     doc.setFont('helvetica', 'bold');
     doc.text('CONFIDENTIAL', 160, 30);
 
-    // Document Body
     doc.setTextColor(0);
     doc.setFontSize(14);
     doc.text(`Product: ${name}`, 14, 50);
@@ -185,17 +201,15 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
     doc.setFont('helvetica', 'bold');
     doc.text(`Batch Size: ${(batchSize/1000).toFixed(2)} kg`, 160, 50);
 
-    // TABLE DATA (Now includes Location)
     const tableData = rows.map((r, i) => {
       const ing = ingredients.find(ing => ing.id === r.ingredient_id);
       const weightG = r.weight_kg * 1000;
-      // Location Fallback
       const loc = ing?.location || '-';
       
       return [ 
         (i + 1).toString(), 
         ing?.name || 'Unknown', 
-        loc, // <--- New Column Data
+        loc, 
         `${weightG.toFixed(2)} g`, 
         `${r.percentage.toFixed(2)} %`, 
         '___' 
@@ -204,15 +218,14 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
 
     autoTable(doc, {
       startY: 80,
-      head: [['#', 'Ingredient Name', 'Location', 'Weight (g)', 'Percent', 'Verify']], // <--- New Column Header
+      head: [['#', 'Ingredient Name', 'Location', 'Weight (g)', 'Percent', 'Verify']],
       body: tableData,
       theme: 'grid',
       headStyles: { fillColor: headerColor, halign: 'left' },
       styles: { cellPadding: 4, fontSize: 10 },
-      // Updated column styles to fit Location
       columnStyles: { 
         0: { cellWidth: 10, halign: 'center' }, 
-        2: { cellWidth: 30, fontStyle: 'italic', textColor: 100 }, // Location column style
+        2: { cellWidth: 30, fontStyle: 'italic', textColor: 100 },
         3: { halign: 'right', fontStyle: 'bold' }, 
         4: { halign: 'right' }, 
         5: { cellWidth: 20, halign: 'center' } 
@@ -226,7 +239,7 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
     doc.save(`BatchRecord_${name}_v${version}.pdf`);
   };
 
-  // --- RENDER (No changes below this line, just standard copy/paste of previous Formulator logic) ---
+  // --- RENDER ---
   if (view === 'list') {
     return (
       <div className="flex-1 flex flex-col bg-background-light dark:bg-background-dark pb-24 h-screen">
@@ -249,34 +262,89 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
         </header>
         
         <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 overflow-auto">
-          {filteredRecipes.map((r) => (
-            <button 
-              key={r.id} 
-              onClick={() => handleEdit(r)}
-              className="bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-primary transition-all text-left group active:scale-[0.98]"
-            >
-              <div className="flex justify-between items-start mb-2">
-                <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${r.status === 'Approved' ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
-                  {r.status || 'Development'}
-                </span>
-                <span className="text-xs font-bold text-primary bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-md">v{r.version}</span>
-              </div>
-              <h3 className="font-bold text-slate-800 dark:text-white mb-1 group-hover:text-primary">{r.name}</h3>
-              <p className="text-xs text-slate-400 font-medium mb-3">{r.project || 'No Client'}</p>
-              <div className="flex items-center gap-2 text-xs text-slate-500 border-t border-slate-100 dark:border-slate-800 pt-3">
-                <span className="material-symbols-outlined text-[16px]">scale</span>
-                <span>{r.unit_size_g}g Ref</span>
-              </div>
-            </button>
-          ))}
-          {filteredRecipes.length === 0 && <div className="col-span-full text-center py-10 text-slate-400">No formulas found for "{searchTerm}"</div>}
+          {Object.entries(groupedRecipes).map(([name, versions], index) => {
+            const latest = versions[0];
+            const isStack = versions.length > 1;
+            const isExpanded = expandedGroup === name;
+
+            // EXPANDED VIEW (Show all versions in this group)
+            if (isExpanded) {
+              return (
+                <div key={name} className="col-span-full bg-slate-100 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3 animate-slideUp">
+                  <div className="flex justify-between items-center mb-2">
+                     <h3 className="font-bold text-slate-500 uppercase text-xs tracking-wider">Versions of {name}</h3>
+                     <button onClick={() => setExpandedGroup(null)} className="text-xs font-bold text-primary bg-white dark:bg-slate-800 px-3 py-1 rounded-full shadow-sm">Close Stack</button>
+                  </div>
+                  {versions.map(ver => (
+                    <button 
+                      key={ver.id} 
+                      onClick={() => handleEdit(ver)}
+                      className="w-full flex justify-between items-center bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-primary transition-all text-left group active:scale-[0.99]"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-xs font-bold text-primary bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-md">v{ver.version}</span>
+                          <span className={`text-[10px] font-bold uppercase ${ver.status === 'Approved' ? 'text-emerald-500' : 'text-slate-400'}`}>{ver.status}</span>
+                        </div>
+                        <p className="text-xs text-slate-400 font-medium">{ver.date}</p>
+                      </div>
+                      <span className="material-symbols-outlined text-slate-300 group-hover:text-primary">edit</span>
+                    </button>
+                  ))}
+                </div>
+              );
+            }
+
+            // COLLAPSED VIEW (Show only top card)
+            return (
+              <button 
+                key={name} 
+                onClick={() => isStack ? setExpandedGroup(name) : handleEdit(latest)}
+                className="relative bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-primary transition-all text-left group active:scale-[0.98]"
+              >
+                {/* Stack Effect Behind */}
+                {isStack && (
+                   <div className="absolute -bottom-1 left-2 right-2 h-4 bg-slate-200 dark:bg-slate-800 rounded-b-xl -z-10"></div>
+                )}
+                
+                <div className="flex justify-between items-start mb-2">
+                  <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${latest.status === 'Approved' ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
+                    {latest.status || 'Development'}
+                  </span>
+                  {isStack ? (
+                    <span className="text-xs font-bold text-white bg-slate-400 px-2 py-1 rounded-full shadow-sm flex items-center gap-1">
+                      <span className="material-symbols-outlined text-[10px]">filter_none</span>
+                      {versions.length}
+                    </span>
+                  ) : (
+                    <span className="text-xs font-bold text-primary bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-md">v{latest.version}</span>
+                  )}
+                </div>
+                
+                <h3 className="font-bold text-slate-800 dark:text-white mb-1 group-hover:text-primary">{latest.name}</h3>
+                <p className="text-xs text-slate-400 font-medium mb-3">{latest.project || 'No Client'}</p>
+                
+                <div className="flex items-center gap-2 text-xs text-slate-500 border-t border-slate-100 dark:border-slate-800 pt-3">
+                  <span className="material-symbols-outlined text-[16px]">scale</span>
+                  <span>{latest.unit_size_g}g Ref</span>
+                  {isStack && <span className="ml-auto text-primary font-bold">View History &rarr;</span>}
+                </div>
+              </button>
+            );
+          })}
+          
+          {Object.keys(groupedRecipes).length === 0 && (
+             <div className="col-span-full text-center py-10 text-slate-400">No formulas found for "{searchTerm}"</div>
+          )}
         </div>
       </div>
     );
   }
 
+  // EDIT VIEW
   return (
     <div className="flex-1 flex flex-col bg-background-light dark:bg-background-dark h-screen pb-24">
+      {/* Header */}
       <header className="p-4 bg-white dark:bg-card-dark border-b border-slate-200 dark:border-slate-800 flex justify-between items-center shrink-0">
         <button onClick={() => setView('list')} className="size-10 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-transform active:scale-95">
           <span className="material-symbols-outlined">arrow_back</span>
@@ -295,6 +363,7 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
         </div>
       </header>
 
+      {/* Editor Body */}
       <main className="flex-1 overflow-auto p-4 space-y-6">
         <section className="bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
           <div className="grid grid-cols-2 gap-4 mb-4">
