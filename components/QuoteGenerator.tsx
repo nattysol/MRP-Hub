@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, onSnapshot, query, orderBy, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Recipe, Ingredient, PackagingItem, Product, Quote } from '../types';
 import jsPDF from 'jspdf';
@@ -28,24 +28,32 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
   const [quoteSearch, setQuoteSearch] = useState('');
   const [quotes, setQuotes] = useState<Quote[]>([]);
 
-  // Create Form State
+  // --- FORM STATE ---
+  const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
   const [clientName, setClientName] = useState('');
-  const [products, setProducts] = useState<Product[]>([]);
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
-  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
-  const [packaging, setPackaging] = useState<PackagingItem[]>([]);
   
+  // Selections
   const [selectedProductId, setSelectedProductId] = useState('');
   const [selectedRecipeId, setSelectedRecipeId] = useState('');
+  
+  // Packaging Selections
   const [selectedContainerId, setSelectedContainerId] = useState('');
   const [selectedClosureId, setSelectedClosureId] = useState('');
   const [selectedLabelId, setSelectedLabelId] = useState('');
   const [selectedBoxId, setSelectedBoxId] = useState('');
 
+  // Tiers
   const [tier1, setTier1] = useState(1000);
   const [tier2, setTier2] = useState(5000);
   const [tier3, setTier3] = useState(10000);
+  
   const [isSaving, setIsSaving] = useState(false);
+
+  // --- DATA LOADING ---
+  const [products, setProducts] = useState<Product[]>([]);
+  const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+  const [packaging, setPackaging] = useState<PackagingItem[]>([]);
 
   const LABOR_PER_UNIT = 0.35;
   const OVERHEAD_PER_UNIT = 0.10;
@@ -61,28 +69,77 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
   }, []);
 
   useEffect(() => {
-    if (autoCreate) setView('create');
+    if (autoCreate) {
+       resetForm();
+       setView('create');
+    }
   }, [autoCreate]);
 
-  useEffect(() => {
-    if (selectedProductId) {
-      const prod = products.find(p => p.id === selectedProductId);
-      if (prod) {
-        setSelectedRecipeId(prod.recipe_id);
-        setSelectedContainerId(prod.container_id || '');
-        setSelectedClosureId(prod.closure_id || '');
-        setSelectedLabelId(prod.label_id || '');
-        setSelectedBoxId(prod.box_id || '');
-        if (!clientName) {
-           const r = recipes.find(rec => rec.id === prod.recipe_id);
-           if (r && r.project) setClientName(r.project);
-        }
+  // --- HANDLERS ---
+
+  const resetForm = () => {
+    setEditingQuoteId(null);
+    setClientName('');
+    setSelectedProductId('');
+    setSelectedRecipeId('');
+    setSelectedContainerId('');
+    setSelectedClosureId('');
+    setSelectedLabelId('');
+    setSelectedBoxId('');
+    setTier1(1000);
+    setTier2(5000);
+    setTier3(10000);
+  };
+
+  // Logic: When Product is selected manually, we auto-fill defaults.
+  // We separated this from useEffect so it doesn't overwrite saved quotes when loading.
+  const handleProductSelect = (prodId: string) => {
+    setSelectedProductId(prodId);
+    
+    const prod = products.find(p => p.id === prodId);
+    if (prod) {
+      // Auto-fill defaults from the Product Builder
+      setSelectedRecipeId(prod.recipe_id || '');
+      setSelectedContainerId(prod.container_id || '');
+      setSelectedClosureId(prod.closure_id || '');
+      setSelectedLabelId(prod.label_id || '');
+      setSelectedBoxId(prod.box_id || '');
+      
+      // Auto-detect client from recipe if blank
+      if (!clientName) {
+         const r = recipes.find(rec => rec.id === prod.recipe_id);
+         if (r && r.project) setClientName(r.project);
       }
     }
-  }, [selectedProductId, products, recipes]);
+  };
+
+  const handleLoadQuote = (q: any) => {
+    setEditingQuoteId(q.id);
+    setClientName(q.client_name || '');
+    
+    // Load Saved State
+    setSelectedProductId(q.product_id || ''); // Note: We don't call handleProductSelect here to avoid overwriting overrides
+    setSelectedRecipeId(q.recipe_id || '');
+    
+    // Packaging
+    setSelectedContainerId(q.container_id || '');
+    setSelectedClosureId(q.closure_id || '');
+    setSelectedLabelId(q.label_id || '');
+    setSelectedBoxId(q.box_id || '');
+
+    // Tiers
+    setTier1(q.tier1_units || 1000);
+    setTier2(q.tier2_units || 5000);
+    setTier3(q.tier3_units || 10000);
+
+    setView('create');
+  };
+
+  // --- CALCULATIONS ---
 
   const productOptions = useMemo(() => products.map(p => ({ id: p.id, name: p.name, subtitle: `SKU: ${p.sku || 'N/A'}` })), [products]);
   const packagingOptions = useMemo(() => packaging.map(p => ({ id: p.id, name: p.name, subtitle: `$${p.unit_price.toFixed(3)} • ${p.category}`, category: p.category, vendor: p.vendor })), [packaging]);
+  
   const filteredQuotes = useMemo(() => {
     if (!quoteSearch) return quotes;
     const lower = quoteSearch.toLowerCase();
@@ -123,24 +180,50 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
 
   const results = { t1: generateQuote(tier1), t2: generateQuote(tier2), t3: generateQuote(tier3) };
 
+  // --- SAVE & PDF ---
+
   const handleSaveQuote = async () => {
     if (!clientName || !selectedProductId || !results.t1) return alert("Missing Info");
     setIsSaving(true);
     try {
       const product = products.find(p => p.id === selectedProductId);
-      await addDoc(collection(db, 'quotes'), {
-        quote_number: `Q-${Math.floor(Math.random() * 10000)}`,
+      
+      const payload = {
         date: new Date().toISOString(),
         client_name: clientName,
         product_name: product?.name || 'Unknown',
         product_sku: product?.sku || 'N/A',
+        // Card Summary Data
         selected_tier_units: tier1,
         selected_tier_price: results.t1.recommendedPrice,
         selected_tier_total: results.t1.totalCogs,
-        created_at: serverTimestamp()
-      });
-      alert("Quote Saved to History");
-      setView('list');
+        // Detailed State (For Reloading)
+        product_id: selectedProductId,
+        recipe_id: selectedRecipeId,
+        container_id: selectedContainerId,
+        closure_id: selectedClosureId,
+        label_id: selectedLabelId,
+        box_id: selectedBoxId,
+        tier1_units: tier1,
+        tier2_units: tier2,
+        tier3_units: tier3,
+        updated_at: serverTimestamp()
+      };
+
+      if (editingQuoteId) {
+        // Update existing
+        await updateDoc(doc(db, 'quotes', editingQuoteId), payload);
+      } else {
+        // Create new
+        await addDoc(collection(db, 'quotes'), {
+          ...payload,
+          quote_number: `Q-${Math.floor(Math.random() * 10000)}`,
+          created_at: serverTimestamp()
+        });
+      }
+      
+      alert("Quote Saved Successfully");
+      // Don't switch view immediately if just saving, but usually we generate PDF right after
     } catch (e) {
       console.error(e);
       alert("Error saving");
@@ -149,12 +232,11 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
     }
   };
 
-  // --- PDF GENERATOR ---
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     if (!selectedRecipe || !results.t1 || !results.t2 || !results.t3) return;
     
-    // Save record first
-    handleSaveQuote();
+    // Auto-save before PDF
+    await handleSaveQuote();
 
     const doc = new jsPDF();
     const product = products.find(p => p.id === selectedProductId);
@@ -200,8 +282,6 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
 
     // 3. Packaging Specs
     const getPkgName = (id: string) => packaging.find(p => p.id === id)?.name || 'Not Selected';
-    
-    // UPDATED: Logic to hide unknown vendors
     const getPkgVendor = (id: string) => {
       const v = packaging.find(p => p.id === id)?.vendor;
       if (!v || v === 'Unknown') return 'Undisclosed, top-tier vendor';
@@ -209,7 +289,6 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
     };
 
     let finalY = (doc as any).lastAutoTable.finalY + 15;
-    
     doc.setFontSize(12);
     doc.setTextColor(0);
     doc.setFont('helvetica', 'bold');
@@ -233,7 +312,6 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
 
     // 4. Formula Breakdown
     finalY = (doc as any).lastAutoTable.finalY + 15;
-    
     doc.setFontSize(12);
     doc.setTextColor(0);
     doc.text("Formula Breakdown", 14, finalY);
@@ -263,7 +341,7 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
           <div className="flex justify-between items-center">
             <button onClick={onBack} className="size-10 flex items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-transform active:scale-95"><span className="material-symbols-outlined">arrow_back</span></button>
             <h2 className="text-lg font-bold">Quote History</h2>
-            <button onClick={() => setView('create')} className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-primary/90 transition-transform active:scale-95">+ New Quote</button>
+            <button onClick={() => { resetForm(); setView('create'); }} className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-primary/90 transition-transform active:scale-95">+ New Quote</button>
           </div>
           <div className="relative">
             <span className="material-symbols-outlined absolute left-3 top-2.5 text-slate-400">search</span>
@@ -272,10 +350,14 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
         </header>
         <div className="p-4 space-y-3 overflow-auto">
           {filteredQuotes.map((q) => (
-            <div key={q.id} className="bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex justify-between items-center hover:border-primary/50 transition-colors">
+            <button 
+              key={q.id} 
+              onClick={() => handleLoadQuote(q)}
+              className="w-full text-left bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex justify-between items-center hover:border-primary/50 transition-all active:scale-[0.98]"
+            >
               <div><p className="text-[10px] font-bold text-slate-400 uppercase mb-1">{q.client_name}</p><h3 className="font-bold text-slate-800 dark:text-white">{q.product_name}</h3><p className="text-xs text-slate-500">SKU: {q.product_sku}</p></div>
               <div className="text-right"><p className="text-sm font-black text-primary">${q.selected_tier_price.toFixed(2)} / unit</p><p className="text-[10px] text-slate-400">Est. Total: ${(q.selected_tier_units * q.selected_tier_price).toLocaleString()}</p></div>
-            </div>
+            </button>
           ))}
           {filteredQuotes.length === 0 && <div className="text-center py-10 text-slate-400">No quotes found.</div>}
         </div>
@@ -288,7 +370,7 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
     <div className="flex-1 flex flex-col bg-background-light dark:bg-background-dark pb-32 min-h-screen">
       <header className="sticky top-0 z-50 flex items-center justify-between bg-white dark:bg-[#111722] p-4 border-b border-slate-200 dark:border-slate-800 shadow-sm shrink-0">
         <button onClick={() => setView('list')} className="size-10 flex items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-transform active:scale-95"><span className="material-symbols-outlined">arrow_back</span></button>
-        <h2 className="text-lg font-bold">New Quote</h2>
+        <h2 className="text-lg font-bold">{editingQuoteId ? 'Edit Quote' : 'New Quote'}</h2>
         <div className="w-10"></div>
       </header>
       <main className="p-4 space-y-6">
@@ -298,7 +380,7 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
         </section>
         <section className="bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
           <div className="flex items-center gap-2 mb-4"><span className="material-symbols-outlined text-primary">grid_view</span><h3 className="text-sm font-bold uppercase tracking-wider text-slate-500">Select Product</h3></div>
-          <SearchableSelect label="Product SKU" placeholder="Search saved products..." options={productOptions} value={selectedProductId} onChange={setSelectedProductId} />
+          <SearchableSelect label="Product SKU" placeholder="Search saved products..." options={productOptions} value={selectedProductId} onChange={handleProductSelect} />
         </section>
         <section className="bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
           <div className="flex justify-between items-center mb-4"><h3 className="text-sm font-bold uppercase text-slate-500">Packaging</h3><span className="text-sm font-bold text-emerald-500">${currentPackagingCost.toFixed(2)}/u</span></div>
@@ -327,7 +409,7 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
       </main>
       <div className="fixed bottom-24 left-0 right-0 p-4 z-40 bg-gradient-to-t from-background-light dark:from-background-dark via-background-light/90 dark:via-background-dark/90 to-transparent">
         <button onClick={handleDownloadPDF} disabled={!selectedRecipe} className="w-full flex items-center justify-center gap-2 bg-primary text-white font-bold h-14 rounded-2xl shadow-xl hover:bg-primary/90 disabled:opacity-50 transition-transform active:scale-95">
-          <span className="material-symbols-outlined">save</span><span>Save & Generate PDF</span>
+          <span className="material-symbols-outlined">save</span><span>{editingQuoteId ? 'Update & Generate PDF' : 'Save & Generate PDF'}</span>
         </button>
       </div>
     </div>
