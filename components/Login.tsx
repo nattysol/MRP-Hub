@@ -14,7 +14,6 @@ const Login: React.FC = () => {
     setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      // App.tsx handles the state change automatically via onAuthStateChanged
     } catch (err: any) {
       console.error(err);
       setError('Invalid email or password.');
@@ -25,10 +24,27 @@ const Login: React.FC = () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background-light dark:bg-background-dark p-6">
       <div className="w-full max-w-sm bg-white dark:bg-card-dark rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 p-8 animate-scaleIn">
-        <div className="text-center mb-8">
-          <div className="size-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4 text-primary">
+        
+        {/* LOGO SECTION */}
+        <div className="flex justify-center mb-6">
+          {/* Ensure your file is named 'logo.png' and is in the public folder */}
+          <img 
+            src="/logo.svg" 
+            alt="Natural Solutions Logo" 
+            className="w-24 h-24 object-contain drop-shadow-lg"
+            onError={(e) => {
+              // Fallback if image isn't found
+              e.currentTarget.style.display = 'none';
+              e.currentTarget.nextElementSibling?.classList.remove('hidden');
+            }}
+          />
+          {/* Fallback Icon */}
+          <div className="hidden size-16 bg-primary/10 rounded-2xl  items-center justify-center text-primary">
             <span className="material-symbols-outlined text-3xl">hub</span>
           </div>
+        </div>
+
+        <div className="text-center mb-8">
           <h1 className="text-2xl font-black text-slate-800 dark:text-white">Manufacturing Hub</h1>
           <p className="text-slate-400 text-sm font-medium">Sign in to access your workspace</p>
         </div>
