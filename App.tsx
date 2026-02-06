@@ -94,40 +94,38 @@ const App: React.FC = () => {
   return (
     <div className="flex flex-col min-h-screen bg-background-light dark:bg-background-dark transition-colors duration-300">
       
-      {/* (Top Bar Controls Removed as requested) */}
-
       {renderScreen()}
       
-      {/* UPDATED BOTTOM NAV */}
-      <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-[#101622] border-t border-slate-200 dark:border-slate-800 pb-safe pt-2 px-2 shadow-[0_-5px_20px_rgba(0,0,0,0.05)]">
-        <div className="flex items-center justify-between max-w-lg mx-auto overflow-x-auto no-scrollbar gap-1">
+      {/* BOTTOM NAVIGATION */}
+      {/* z-index high, allow overflow visible so center button can pop out */}
+      <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-[#101622] border-t border-slate-200 dark:border-slate-800 pb-safe shadow-[0_-5px_20px_rgba(0,0,0,0.05)]">
+        <div className="flex items-end justify-between px-2 pt-2 pb-1 max-w-lg mx-auto">
           
-          {/* Main Navigation Items */}
+          {/* Left Group */}
           {showInventory && <NavBtn icon="grocery" label="Ingred" active={currentScreen === 'inventory'} onClick={() => handleNavigate('inventory')} />}
-          {showFormulas && <NavBtn icon="science" label="Formulas" active={currentScreen === 'formulator'} onClick={() => handleNavigate('formulator', undefined, false)} />}
+          {showFormulas && <NavBtn icon="science" label="Formula" active={currentScreen === 'formulator'} onClick={() => handleNavigate('formulator', undefined, false)} />}
           
+          {/* Center Action Button (Popped Out) */}
           {showProducts && (
-            <button onClick={() => handleNavigate('products')} className={`shrink-0 flex flex-col items-center justify-center -mt-8 size-14 rounded-full shadow-lg border-4 border-white dark:border-[#0b0f19] transition-transform active:scale-95 ${currentScreen === 'products' ? 'bg-primary text-white' : 'bg-slate-900 text-white'}`}>
-              <span className="material-symbols-outlined text-2xl">grid_view</span>
-            </button>
+            <div className="relative -top-6 mx-1">
+              <button 
+                onClick={() => handleNavigate('products')} 
+                className={`flex items-center justify-center size-14 rounded-full shadow-xl border-4 border-white dark:border-[#0b0f19] transition-transform active:scale-95 ${currentScreen === 'products' ? 'bg-primary text-white' : 'bg-slate-900 text-white'}`}
+              >
+                <span className="material-symbols-outlined text-2xl">grid_view</span>
+              </button>
+            </div>
           )}
           
+          {/* Right Group */}
           {showPackaging && <NavBtn icon="package_2" label="Pack" active={currentScreen === 'packaging'} onClick={() => handleNavigate('packaging')} />}
           {showQuotes && <NavBtn icon="request_quote" label="Quotes" active={currentScreen === 'quote'} onClick={() => handleNavigate('quote', undefined, false)} />}
 
-          {/* Divider */}
-          <div className="w-px h-8 bg-slate-200 dark:bg-slate-800 mx-1 shrink-0"></div>
+          {/* System Icons (Small Divider) */}
+          <div className="w-px h-6 bg-slate-200 dark:bg-slate-800 mx-1 mb-2"></div>
 
-          {/* System Controls (Moved Here) */}
-          <button onClick={() => setIsDark(!isDark)} className="flex flex-col items-center gap-1 w-12 text-slate-400 hover:text-yellow-500 dark:hover:text-yellow-400 shrink-0">
-             <span className="material-symbols-outlined text-xl">{isDark ? 'light_mode' : 'dark_mode'}</span>
-             <span className="text-[9px] font-bold uppercase tracking-tight">Theme</span>
-          </button>
-          
-          <button onClick={handleLogout} className="flex flex-col items-center gap-1 w-12 text-slate-400 hover:text-red-500 shrink-0">
-             <span className="material-symbols-outlined text-xl">logout</span>
-             <span className="text-[9px] font-bold uppercase tracking-tight">Exit</span>
-          </button>
+          <NavBtn icon={isDark ? 'light_mode' : 'dark_mode'} label="Theme" active={false} onClick={() => setIsDark(!isDark)} />
+          <NavBtn icon="logout" label="Exit" active={false} onClick={handleLogout} isDanger />
         
         </div>
       </nav>
@@ -135,10 +133,15 @@ const App: React.FC = () => {
   );
 };
 
-const NavBtn = ({ icon, label, active, onClick }: any) => (
-  <button onClick={onClick} className={`shrink-0 flex flex-col items-center gap-1 w-14 ${active ? 'text-primary' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'}`}>
-    <span className={`material-symbols-outlined ${active ? 'filled' : ''}`}>{icon}</span>
-    <span className="text-[9px] font-bold uppercase tracking-tight truncate w-full text-center">{label}</span>
+const NavBtn = ({ icon, label, active, onClick, isDanger }: any) => (
+  <button 
+    onClick={onClick} 
+    className={`flex-1 min-w-0 flex flex-col items-center gap-1 py-1 group ${active ? 'text-primary' : isDanger ? 'text-slate-300 hover:text-red-500' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'}`}
+  >
+    <span className={`material-symbols-outlined text-2xl ${active ? 'filled' : ''}`}>{icon}</span>
+    <span className="text-[10px] font-bold uppercase tracking-tight w-full text-center whitespace-nowrap overflow-hidden text-ellipsis px-1">
+      {label}
+    </span>
   </button>
 );
 
