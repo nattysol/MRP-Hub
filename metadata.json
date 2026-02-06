@@ -1,0 +1,7 @@
+{
+  "name": "MRP Master - Manufacturing Hub",
+  "description": "A professional-grade Manufacturing Resource Planning (MRP) application for managing inventory, formulating recipes, and analyzing production costs with real-time AI insights.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
