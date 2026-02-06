@@ -39,7 +39,7 @@ const Login: React.FC = () => {
           />
           
           {/* Fallback Icon (Hidden if logo loads) */}
-          <div className="hidden size-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-4">
+          <div className="hidden size-16 bg-blue-50 text-blue-600 rounded-2xl items-center justify-center mb-4">
              <span className="material-symbols-outlined text-3xl">water_drop</span>
           </div>
 

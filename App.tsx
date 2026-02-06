@@ -67,12 +67,21 @@ const App: React.FC = () => {
 
   const renderScreen = () => {
     const ScreenComponent = () => {
+      // We get the email from the 'user' object, or fallback to 'Staff'
+        const currentUserEmail = user?.email || 'Staff';
+
         switch (currentScreen) {
             case 'dashboard': return <Dashboard role={role} onNavigate={handleNavigate} />;
             case 'inventory': return <Inventory onBack={() => setCurrentScreen('dashboard')} />;
-            case 'formulator': return <Formulator onBack={() => setCurrentScreen('dashboard')} autoCreate={autoCreate} />;
+            
+            // PASS THE USER NAME HERE
+            case 'formulator': return <Formulator onBack={() => setCurrentScreen('dashboard')} autoCreate={autoCreate} userName={currentUserEmail} />;
+            
             case 'products': return <ProductBuilder initialRecipeId={activeRecipeId} onBack={() => setCurrentScreen('dashboard')} />;
-            case 'quote': return <QuoteGenerator onBack={() => setCurrentScreen('dashboard')} autoCreate={autoCreate} />;
+            
+            // PASS THE USER NAME HERE
+            case 'quote': return <QuoteGenerator onBack={() => setCurrentScreen('dashboard')} autoCreate={autoCreate} userName={currentUserEmail} />;
+            
             case 'packaging': return <Packaging onBack={() => setCurrentScreen('dashboard')} />;
             default: return <Dashboard role={role} onNavigate={handleNavigate} />;
         }

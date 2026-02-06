@@ -9,6 +9,7 @@ import SearchableSelect from './SearchableSelect';
 interface QuoteGeneratorProps {
   onBack: () => void;
   autoCreate?: boolean;
+  userName: string; // <--- NEW PROP
 }
 
 interface QuoteResult {
@@ -22,7 +23,7 @@ interface QuoteResult {
   recommendedPrice: number;
 }
 
-const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate }) => {
+const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, userName }) => {
   const [view, setView] = useState<'list' | 'create'>(autoCreate ? 'create' : 'list');
   const [quoteSearch, setQuoteSearch] = useState('');
   const [quotes, setQuotes] = useState<Quote[]>([]);
@@ -155,23 +156,30 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate }) =
     const product = products.find(p => p.id === selectedProductId);
     const prodName = product?.name || selectedRecipe.name;
     const today = new Date().toLocaleDateString();
+
     doc.setFillColor(79, 70, 229); 
     doc.rect(0, 0, 210, 30, 'F');
     doc.setFontSize(20);
     doc.setTextColor(255);
     doc.setFont('helvetica', 'bold');
     doc.text('MANUFACTURING HUB', 14, 18);
+    
+    // Top Right Info
     doc.setFontSize(10);
-    doc.text(`Client: ${clientName}`, 160, 12);
-    doc.text(`Date: ${today}`, 160, 18);
+    doc.text(`Date: ${today}`, 160, 12);
+    doc.text(`By: ${userName}`, 160, 18); // <--- Added User
+
     doc.setTextColor(0);
     doc.setFontSize(14);
     doc.setFont('helvetica', 'bold');
     doc.text(prodName, 14, 45);
+
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(100);
-    doc.text(`SKU: ${product?.sku || 'N/A'}`, 14, 51);
+    doc.text(`Client: ${clientName}`, 14, 51); // <--- Added Client
+    doc.text(`SKU: ${product?.sku || 'N/A'}`, 14, 56);
+
     autoTable(doc, {
       startY: 70,
       head: [['Order Quantity', 'Unit Price', 'Total Cost', 'Lead Time']],

@@ -9,9 +9,10 @@ import autoTable from 'jspdf-autotable';
 interface FormulatorProps {
   onBack: () => void;
   autoCreate?: boolean;
+  userName: string; // <--- NEW PROP
 }
 
-const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate }) => {
+const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName }) => {
   const [view, setView] = useState<'list' | 'edit'>('list');
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
@@ -136,32 +137,45 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate }) => {
     }
   };
 
+  // --- UPDATED PDF GENERATION ---
   const handleDownloadPDF = () => {
     const doc = new jsPDF();
     const today = new Date().toLocaleDateString();
     const headerColor: [number, number, number] = [40, 40, 40]; 
 
     doc.setFillColor(...headerColor);
-    doc.rect(0, 0, 210, 30, 'F');
+    doc.rect(0, 0, 210, 35, 'F'); // Made header slightly taller
     doc.setFontSize(20);
     doc.setTextColor(255);
     doc.setFont('helvetica', 'bold');
-    doc.text('MANUFACTURING BATCH SHEET', 14, 18);
+    doc.text('MANUFACTURING BATCH SHEET', 14, 22);
+    
+    // Top Right Meta
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Date: ${today}`, 160, 18);
+    doc.text(`Date: ${today}`, 160, 16);
+    doc.text(`By: ${userName}`, 160, 22); // <--- Added User
 
     doc.setTextColor(0);
-    doc.setFontSize(12);
-    doc.text(`Product: ${name}`, 14, 45);
-    doc.text(`Version: ${version}`, 14, 52);
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Product: ${name}`, 14, 50);
+
     doc.setFontSize(10);
-    doc.setTextColor(100);
-    doc.text(`Production Target: ${unitCount.toLocaleString()} units @ ${unitWeight}g`, 14, 60);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(80);
+    
+    // Identity Block
+    doc.text(`Version: ${version}`, 14, 56);
+    doc.text(`Client: ${project || 'Internal'}`, 14, 62); // <--- Added Client
+    
+    // Production Block
+    doc.text(`Target: ${unitCount.toLocaleString()} units @ ${unitWeight}g`, 14, 72);
+    
     doc.setFontSize(14);
     doc.setTextColor(0);
     doc.setFont('helvetica', 'bold');
-    doc.text(`Total Batch Size: ${(batchSize/1000).toFixed(2)} kg`, 160, 45);
+    doc.text(`Batch Size: ${(batchSize/1000).toFixed(2)} kg`, 160, 50);
 
     const tableData = rows.map((r, i) => {
       const ing = ingredients.find(ing => ing.id === r.ingredient_id);
@@ -170,7 +184,7 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate }) => {
     });
 
     autoTable(doc, {
-      startY: 70,
+      startY: 80,
       head: [['#', 'Ingredient Name', 'Weight (g)', 'Percent', 'Verify']],
       body: tableData,
       theme: 'grid',
@@ -186,7 +200,6 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate }) => {
     doc.save(`BatchRecord_${name}_v${version}.pdf`);
   };
 
-  // LIST VIEW
   if (view === 'list') {
     return (
       <div className="flex-1 flex flex-col bg-background-light dark:bg-background-dark pb-24 h-screen">
@@ -235,7 +248,6 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate }) => {
     );
   }
 
-  // EDIT VIEW
   return (
     <div className="flex-1 flex flex-col bg-background-light dark:bg-background-dark h-screen pb-24">
       <header className="p-4 bg-white dark:bg-card-dark border-b border-slate-200 dark:border-slate-800 flex justify-between items-center shrink-0">
