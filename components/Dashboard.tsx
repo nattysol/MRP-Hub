@@ -37,7 +37,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate, role }) => {
       <header className="mb-8 flex items-center gap-4">
         {/* Small Logo for Dashboard */}
         <div className="size-12 bg-white dark:bg-card-dark rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 flex items-center justify-center p-2">
-            <img src="/ns-logo.svg" alt="NS" className="w-full h-full object-contain" />
+            <img src="/logo.svg" alt="NS" className="w-full h-full object-contain" />
         </div>
         <div>
           <h1 className="text-xl font-black text-slate-800 dark:text-white leading-tight">Natural Solutions</h1>
