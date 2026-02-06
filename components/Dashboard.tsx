@@ -9,7 +9,8 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ onNavigate, role }) => {
-  const [recentRecipes, setRecentRecipes] = useState<Recipe[]>([]);
+  // We now store an array of arrays (groups of recipes)
+  const [recentGroups, setRecentGroups] = useState<Recipe[][]>([]);
   const [stats, setStats] = useState({ ingredients: 0, recipes: 0 });
 
   useEffect(() => {
@@ -19,9 +20,31 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate, role }) => {
       setStats({ ingredients: ingSnap.size, recipes: recSnap.size });
 
       if (role === 'admin' || role === 'production') {
-        const q = query(collection(db, 'recipes'), orderBy('date', 'desc'), limit(3));
-        const recs = await getDocs(q);
-        setRecentRecipes(recs.docs.map(d => ({ id: d.id, ...d.data() } as Recipe)));
+        // 1. Fetch a larger batch (50) to ensure we find unique names
+        // We assume 'created_at' exists from our previous updates, fallback to insertion order
+        const q = query(collection(db, 'recipes'), orderBy('created_at', 'desc'), limit(50));
+        const snapshot = await getDocs(q);
+        const rawRecipes = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Recipe));
+
+        // 2. Group by Name
+        const groups: { [key: string]: Recipe[] } = {};
+        rawRecipes.forEach(r => {
+          if (!groups[r.name]) groups[r.name] = [];
+          groups[r.name].push(r);
+        });
+
+        // 3. Convert to array and take Top 3 Unique Projects
+        // The query was already sorted by time, so the order of keys is roughly correct,
+        // but let's ensure we sort groups by their latest member's timestamp
+        const sortedGroups = Object.values(groups)
+          .sort((a, b) => {
+             // Sort by the first (latest) item in each group
+             // Using fallback to 0 if date comparison fails
+             return (b[0].created_at?.seconds || 0) - (a[0].created_at?.seconds || 0);
+          })
+          .slice(0, 3); // Keep only top 3 unique projects
+
+        setRecentGroups(sortedGroups);
       }
     };
     fetchData();
@@ -35,9 +58,17 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate, role }) => {
       
       {/* BRANDED HEADER */}
       <header className="mb-8 flex items-center gap-4">
-        {/* Small Logo for Dashboard */}
         <div className="size-12 bg-white dark:bg-card-dark rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 flex items-center justify-center p-2">
-            <img src="/logo.svg" alt="NS" className="w-full h-full object-contain" />
+            <img 
+              src="/logo.png" 
+              alt="NS" 
+              className="w-full h-full object-contain"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+                e.currentTarget.nextElementSibling?.classList.remove('hidden');
+              }} 
+            />
+            <div className="hidden text-primary material-symbols-outlined text-2xl">hub</div>
         </div>
         <div>
           <h1 className="text-xl font-black text-slate-800 dark:text-white leading-tight">Natural Solutions</h1>
@@ -59,20 +90,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate, role }) => {
         </span>
       </div>
 
-      {/* Quick Actions Grid */}
+      {/* Quick Actions */}
       <div className="grid grid-cols-2 gap-4 mb-8">
-        {canSeeProduction && (
-          <DashboardCard icon="add_circle" label="New Formula" color="bg-primary text-white" onClick={() => onNavigate('formulator', undefined, true)} />
-        )}
-        {canSeeOps && (
-          <DashboardCard icon="grid_view" label="Build Product" color="bg-slate-800 dark:bg-slate-700 text-white" onClick={() => onNavigate('products')} />
-        )}
-        {canSeeOps && (
-          <DashboardCard icon="request_quote" label="Quote Gen" color="bg-white dark:bg-card-dark text-slate-600 dark:text-slate-200 border border-slate-200 dark:border-slate-800" onClick={() => onNavigate('quote', undefined, true)} />
-        )}
-        {canSeeProduction && (
-          <DashboardCard icon="inventory_2" label="Inventory" color="bg-white dark:bg-card-dark text-slate-600 dark:text-slate-200 border border-slate-200 dark:border-slate-800" onClick={() => onNavigate('inventory')} />
-        )}
+        {canSeeProduction && <DashboardCard icon="add_circle" label="New Formula" color="bg-primary text-white" onClick={() => onNavigate('formulator', undefined, true)} />}
+        {canSeeOps && <DashboardCard icon="grid_view" label="Build Product" color="bg-slate-800 dark:bg-slate-700 text-white" onClick={() => onNavigate('products')} />}
+        {canSeeOps && <DashboardCard icon="request_quote" label="Quote Gen" color="bg-white dark:bg-card-dark text-slate-600 dark:text-slate-200 border border-slate-200 dark:border-slate-800" onClick={() => onNavigate('quote', undefined, true)} />}
+        {canSeeProduction && <DashboardCard icon="inventory_2" label="Inventory" color="bg-white dark:bg-card-dark text-slate-600 dark:text-slate-200 border border-slate-200 dark:border-slate-800" onClick={() => onNavigate('inventory')} />}
       </div>
 
       {/* Stats */}
@@ -91,23 +114,65 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate, role }) => {
         )}
       </div>
 
-      {/* Recent Activity */}
+      {/* Recent Activity (STACKED) */}
       {canSeeProduction && (
         <>
           <div className="flex justify-between items-end mb-4">
             <h3 className="font-bold text-slate-700 dark:text-slate-300">Recent Formulations</h3>
-            <button onClick={() => onNavigate('formulator')} className="text-xs font-bold text-primary">View All</button>
+            <button onClick={() => onNavigate('formulator')} className="text-xs font-bold text-primary">View Library</button>
           </div>
+
           <div className="flex flex-col gap-3">
-            {recentRecipes.map(r => (
-              <button key={r.id} onClick={() => onNavigate('products', r.id)} className="flex items-center justify-between p-4 bg-white dark:bg-card-dark rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-primary/50 transition-colors text-left group">
-                <div className="flex items-center gap-3">
-                  <div className="size-10 rounded-lg bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center text-primary font-bold text-xs group-hover:scale-110 transition-transform">v{r.version}</div>
-                  <div><p className="font-bold text-slate-800 dark:text-white text-sm group-hover:text-primary transition-colors">{r.name}</p><p className="text-xs text-slate-400">{r.date} • {r.project}</p></div>
-                </div>
-                <div className="flex items-center gap-2"><span className="text-xs font-bold bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded text-slate-500">{r.status || 'Draft'}</span><span className="material-symbols-outlined text-slate-300 text-lg">chevron_right</span></div>
-              </button>
-            ))}
+            {recentGroups.map((group) => {
+              const latest = group[0]; // The most recent version
+              const isStack = group.length > 1; // Do we have older versions?
+
+              return (
+                <button 
+                  key={latest.id} 
+                  // Navigate to Formulator (not products) so we can edit the recipe
+                  onClick={() => onNavigate('formulator', latest.id)}
+                  className="relative flex items-center justify-between p-4 bg-white dark:bg-card-dark rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-primary/50 transition-colors text-left group active:scale-[0.98]"
+                >
+                  {/* STACK VISUAL EFFECT */}
+                  {isStack && (
+                    <div className="absolute -bottom-1 left-2 right-2 h-4 bg-slate-200 dark:bg-slate-800 rounded-b-xl -z-10"></div>
+                  )}
+
+                  <div className="flex items-center gap-3">
+                    <div className="size-10 rounded-lg bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center text-primary font-bold text-xs group-hover:scale-110 transition-transform">
+                      v{latest.version}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-slate-800 dark:text-white text-sm group-hover:text-primary transition-colors">
+                          {latest.name}
+                        </p>
+                        {/* Stack Count Badge */}
+                        {isStack && (
+                          <span className="flex items-center gap-0.5 bg-slate-100 dark:bg-slate-700 text-slate-500 px-1.5 py-0.5 rounded text-[9px] font-bold">
+                            <span className="material-symbols-outlined text-[10px]">filter_none</span>
+                            {group.length}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-400">{latest.date} • {latest.project || 'Internal'}</p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-bold px-2 py-1 rounded ${latest.status === 'Approved' ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'}`}>
+                      {latest.status || 'Draft'}
+                    </span>
+                    <span className="material-symbols-outlined text-slate-300 text-lg">chevron_right</span>
+                  </div>
+                </button>
+              );
+            })}
+            
+            {recentGroups.length === 0 && (
+              <div className="text-center py-10 text-slate-400 text-sm">No recent formulations found.</div>
+            )}
           </div>
         </>
       )}
