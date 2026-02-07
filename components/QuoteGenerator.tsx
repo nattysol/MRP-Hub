@@ -18,6 +18,7 @@ interface QuoteResult {
   packagingCostPerUnit: number;
   laborPerUnit: number;
   overheadPerUnit: number;
+  setupPerUnit: number; // <--- NEW: Economies of Scale
   totalCogsPerUnit: number;
   totalCogs: number;
   recommendedPrice: number;
@@ -37,11 +38,15 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
   const [clientName, setClientName] = useState('');
   const [version, setVersion] = useState(1);
   
+  // Costing Config (NEW Adjustable Fields)
+  const [laborRate, setLaborRate] = useState(0.35);
+  const [overheadRate, setOverheadRate] = useState(0.10);
+  const [setupCost, setSetupCost] = useState(250); // Default $250 setup fee
+  const [targetMargin, setTargetMargin] = useState(40); // Target Margin %
+
   // Selections
   const [selectedProductId, setSelectedProductId] = useState('');
   const [selectedRecipeId, setSelectedRecipeId] = useState('');
-  
-  // Packaging Selections
   const [selectedContainerId, setSelectedContainerId] = useState('');
   const [selectedClosureId, setSelectedClosureId] = useState('');
   const [selectedLabelId, setSelectedLabelId] = useState('');
@@ -59,10 +64,6 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [packaging, setPackaging] = useState<PackagingItem[]>([]);
-
-  const LABOR_PER_UNIT = 0.35;
-  const OVERHEAD_PER_UNIT = 0.10;
-  const MARGIN_DIVISOR = 0.65; 
 
   useEffect(() => {
     const unsubQuotes = onSnapshot(query(collection(db, 'quotes'), orderBy('date', 'desc')), snap => setQuotes(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -114,6 +115,9 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
     setTier1(1000);
     setTier2(5000);
     setTier3(10000);
+    setLaborRate(0.35);
+    setOverheadRate(0.10);
+    setSetupCost(250);
   };
 
   const handleProductSelect = (prodId: string) => {
@@ -146,6 +150,12 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
     setTier1(q.tier1_units || 1000);
     setTier2(q.tier2_units || 5000);
     setTier3(q.tier3_units || 10000);
+    
+    // Load config if available, else defaults
+    setLaborRate(q.labor_rate !== undefined ? q.labor_rate : 0.35);
+    setOverheadRate(q.overhead_rate !== undefined ? q.overhead_rate : 0.10);
+    setSetupCost(q.setup_cost !== undefined ? q.setup_cost : 250);
+
     setView('create');
   };
 
@@ -182,22 +192,30 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
     return {
         material: materialCost,
         packaging: pack,
-        labor: LABOR_PER_UNIT,
-        overhead: OVERHEAD_PER_UNIT,
-        total: materialCost + pack + LABOR_PER_UNIT + OVERHEAD_PER_UNIT
+        baseTotal: materialCost + pack + laborRate + overheadRate
     };
-  }, [selectedRecipe, products, selectedProductId, ingredients, packaging, selectedContainerId, selectedClosureId, selectedLabelId, selectedBoxId]);
+  }, [selectedRecipe, products, selectedProductId, ingredients, packaging, selectedContainerId, selectedClosureId, selectedLabelId, selectedBoxId, laborRate, overheadRate]);
 
   const generateQuote = (units: number): QuoteResult | null => {
     if (!selectedRecipe) return null;
-    const totalCogsPerUnit = costs.total;
-    const recommendedPrice = totalCogsPerUnit / MARGIN_DIVISOR;
+    
+    // ECONOMIES OF SCALE MAGIC: Spread setup cost over units
+    const setupPerUnit = setupCost / units;
+    
+    const totalCogsPerUnit = costs.baseTotal + setupPerUnit;
+    
+    // Price based on Margin Target
+    // Formula: Price = Cost / (1 - Margin%)
+    const marginDecimal = targetMargin / 100;
+    const recommendedPrice = totalCogsPerUnit / (1 - marginDecimal);
+    
     return {
       units, 
       materialCostPerUnit: costs.material, 
       packagingCostPerUnit: costs.packaging, 
-      laborPerUnit: costs.labor, 
-      overheadPerUnit: costs.overhead, 
+      laborPerUnit: laborRate, 
+      overheadPerUnit: overheadRate, 
+      setupPerUnit,
       totalCogsPerUnit, 
       totalCogs: totalCogsPerUnit * units, 
       recommendedPrice,
@@ -222,6 +240,11 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
         selected_tier_units: tier1,
         selected_tier_price: results.t1.recommendedPrice,
         selected_tier_total: results.t1.totalCogs,
+        
+        // Save Configs
+        labor_rate: laborRate,
+        overhead_rate: overheadRate,
+        setup_cost: setupCost,
         
         product_id: selectedProductId,
         recipe_id: selectedRecipeId,
@@ -323,25 +346,8 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
       headStyles: { fillColor: [60, 60, 60] },
       styles: { fontSize: 9 }
     });
-
-    finalY = (doc as any).lastAutoTable.finalY + 15;
-    doc.setFontSize(12);
-    doc.setTextColor(0);
-    doc.text("Formula Breakdown", 14, finalY);
-
-    const formulaData = selectedRecipe.ingredients.map(ri => {
-      const ing = ingredients.find(i => i.id === ri.ingredient_id);
-      return [ing?.name || 'Unknown', `${ri.percentage.toFixed(2)}%`];
-    });
-
-    autoTable(doc, {
-      startY: finalY + 5,
-      head: [['Ingredient', 'Concentration']],
-      body: formulaData,
-      theme: 'striped',
-      headStyles: { fillColor: [60, 60, 60] },
-      styles: { fontSize: 9 }
-    });
+    
+    // Add Cost Config to PDF footer for internal reference? (Optional, maybe skip for client PDF)
 
     doc.save(`Quote_${prodName}_v${version}.pdf`);
   };
@@ -439,17 +445,28 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
           <SearchableSelect label="Product SKU" placeholder="Search saved products..." options={productOptions} value={selectedProductId} onChange={handleProductSelect} />
         </section>
 
+        {/* --- COST CONFIG (NEW) --- */}
+        <section className="bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
+           <div className="flex justify-between items-center mb-4"><h3 className="text-sm font-bold uppercase text-slate-500">Pricing Logic</h3></div>
+           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+             <div><label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Labor/Unit ($)</label><input type="number" value={laborRate} onChange={e => setLaborRate(parseFloat(e.target.value))} className="w-full p-2 text-center border rounded-lg bg-slate-50 dark:bg-slate-900 font-bold"/></div>
+             <div><label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Overhead/Unit ($)</label><input type="number" value={overheadRate} onChange={e => setOverheadRate(parseFloat(e.target.value))} className="w-full p-2 text-center border rounded-lg bg-slate-50 dark:bg-slate-900 font-bold"/></div>
+             <div><label className="text-[10px] font-bold text-emerald-500 uppercase block mb-1">Target Margin %</label><input type="number" value={targetMargin} onChange={e => setTargetMargin(parseFloat(e.target.value))} className="w-full p-2 text-center border rounded-lg bg-slate-50 dark:bg-slate-900 font-bold text-emerald-600"/></div>
+             <div><label className="text-[10px] font-bold text-indigo-500 uppercase block mb-1">Batch Setup ($)</label><input type="number" value={setupCost} onChange={e => setSetupCost(parseFloat(e.target.value))} className="w-full p-2 text-center border rounded-lg bg-slate-50 dark:bg-slate-900 font-bold text-indigo-600"/></div>
+           </div>
+        </section>
+
         {/* --- FULL COGS BREAKDOWN --- */}
         <section className="bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-sm font-bold uppercase text-slate-500">COGS Breakdown</h3>
-              <span className="text-sm font-black text-emerald-500">${costs.total.toFixed(2)} <span className="text-[10px] text-slate-400 font-normal">/ unit</span></span>
+              <h3 className="text-sm font-bold uppercase text-slate-500">Base COGS (Variable)</h3>
+              <span className="text-sm font-black text-slate-800 dark:text-white">${costs.baseTotal.toFixed(2)} <span className="text-[10px] text-slate-400 font-normal">/ unit</span></span>
            </div>
            <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="flex justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"><span>Ingredients</span><span className="font-bold">${costs.material.toFixed(2)}</span></div>
               <div className="flex justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"><span>Packaging</span><span className="font-bold">${costs.packaging.toFixed(2)}</span></div>
-              <div className="flex justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"><span>Labor</span><span className="font-bold">${costs.labor.toFixed(2)}</span></div>
-              <div className="flex justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"><span>Overhead</span><span className="font-bold">${costs.overhead.toFixed(2)}</span></div>
+              <div className="flex justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"><span>Labor</span><span className="font-bold">${laborRate.toFixed(2)}</span></div>
+              <div className="flex justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"><span>Overhead</span><span className="font-bold">${overheadRate.toFixed(2)}</span></div>
            </div>
         </section>
 
@@ -473,7 +490,7 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
         </section>
         {selectedRecipe && (
           <div className="rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark shadow-sm">
-             <div className="grid grid-cols-12 gap-2 bg-slate-50 dark:bg-slate-800/50 p-3 text-[10px] font-bold text-slate-500 border-b border-slate-200 dark:border-slate-700 uppercase"><div className="col-span-3">Units</div><div className="col-span-3 text-right">Margin</div><div className="col-span-3 text-right">Unit</div><div className="col-span-3 text-right text-primary">Price</div></div>
+             <div className="grid grid-cols-12 gap-2 bg-slate-50 dark:bg-slate-800/50 p-3 text-[10px] font-bold text-slate-500 border-b border-slate-200 dark:border-slate-700 uppercase"><div className="col-span-3">Units</div><div className="col-span-3 text-right">Setup Impact</div><div className="col-span-3 text-right">Margin</div><div className="col-span-3 text-right text-primary">Price</div></div>
              <QuoteRow result={results.t1} />
              <QuoteRow result={results.t2} highlighted />
              <QuoteRow result={results.t3} />
@@ -495,9 +512,11 @@ const QuoteRow = ({ result, highlighted }: { result: QuoteResult | null, highlig
     <div className={`grid grid-cols-12 gap-2 p-4 items-center border-b border-slate-100 dark:border-slate-800 last:border-0 ${highlighted ? 'bg-primary/5 dark:bg-primary/10 relative' : ''}`}>
       {highlighted && <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary"></div>}
       <div className={`col-span-3 font-bold text-sm ${highlighted ? 'text-primary' : 'text-slate-700 dark:text-slate-300'}`}>{result.units.toLocaleString()}</div>
-      {/* Show Margin % instead of Total Cost */}
+      
+      {/* Show how much Setup Cost adds to each unit (The Economy of Scale visual) */}
+      <div className="col-span-3 text-right"><p className="text-xs font-bold text-indigo-500">+${result.setupPerUnit.toFixed(2)}</p></div>
+      
       <div className="col-span-3 text-right"><p className={`text-xs font-bold ${result.margin < 30 ? 'text-red-500' : 'text-emerald-500'}`}>{result.margin.toFixed(0)}%</p></div>
-      <div className="col-span-3 text-right"><p className="text-[10px] text-slate-400">${result.totalCogsPerUnit.toFixed(2)}</p></div>
       <div className="col-span-3 text-right"><p className={`font-black text-base ${highlighted ? 'text-primary' : 'text-slate-900 dark:text-white'}`}>${result.recommendedPrice.toFixed(2)}</p></div>
     </div>
   );
