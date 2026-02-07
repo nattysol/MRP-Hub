@@ -10,15 +10,15 @@ interface FormulatorProps {
   onBack: () => void;
   autoCreate?: boolean;
   userName: string;
+  initialRecipeId?: string; // <--- NEW PROP
 }
 
-const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName }) => {
+const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName, initialRecipeId }) => {
   const [view, setView] = useState<'list' | 'edit'>('list');
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   
-  // Stacking State
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
 
   // Editor State
@@ -32,6 +32,7 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
   const [rows, setRows] = useState<RecipeIngredient[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Load Data
   useEffect(() => {
     const unsubRec = onSnapshot(query(collection(db, 'recipes'), orderBy('date', 'desc')), snap => {
       setRecipes(snap.docs.map(d => ({ id: d.id, ...d.data() } as Recipe)));
@@ -44,36 +45,42 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
     return () => { unsubRec(); unsubIng(); };
   }, []);
 
+  // Handle Auto Create (from Dashboard "New" button)
   useEffect(() => {
     if (autoCreate) handleNew();
   }, [autoCreate]);
 
-  // 1. Group Logic: Group recipes by Name, then sort by Version Descending
+  // FIX: Handle Opening Specific Recipe (from Dashboard "Recent" click)
+  useEffect(() => {
+    if (initialRecipeId && recipes.length > 0) {
+      const target = recipes.find(r => r.id === initialRecipeId);
+      if (target) {
+        handleEdit(target);
+      }
+    }
+  }, [initialRecipeId, recipes]); // Runs when recipes load or ID changes
+
+  // ... (Rest of logic: groupedRecipes, handleEdit, handleNew, etc. remains the same)
+  // ... (Paste the rest of your Formulator code here from the previous step)
+  // For brevity, I will include the handlers to ensure context is correct
+  
   const groupedRecipes = useMemo(() => {
     const groups: { [key: string]: Recipe[] } = {};
-    
-    // Filter first
     const filtered = recipes.filter(r => {
       if (!searchTerm) return true;
       const lower = searchTerm.toLowerCase();
       return r.name.toLowerCase().includes(lower) || (r.project || '').toLowerCase().includes(lower);
     });
-
-    // Group
     filtered.forEach(r => {
       if (!groups[r.name]) groups[r.name] = [];
       groups[r.name].push(r);
     });
-
-    // Sort versions within groups (highest number first)
     Object.keys(groups).forEach(key => {
       groups[key].sort((a, b) => parseFloat(b.version) - parseFloat(a.version));
     });
-
     return groups;
   }, [recipes, searchTerm]);
 
-  // Editor Handlers
   const handleEdit = (original: Recipe) => {
     setName(original.name);
     setProject(original.project);
@@ -99,6 +106,7 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
     setView('edit');
   };
 
+  // ... (keep batch configs, row changes, PDF gen, etc.)
   const handleBatchConfigChange = (newUnitWeight: number, newUnitCount: number) => {
     setUnitWeight(newUnitWeight);
     setUnitCount(newUnitCount);
@@ -152,7 +160,7 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
       });
       alert(`Saved ${name} v${version}`);
       setView('list');
-      setExpandedGroup(null); // Reset view
+      setExpandedGroup(null);
     } catch (e) {
       console.error(e);
       alert("Error saving.");
@@ -223,13 +231,7 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
       theme: 'grid',
       headStyles: { fillColor: headerColor, halign: 'left' },
       styles: { cellPadding: 4, fontSize: 10 },
-      columnStyles: { 
-        0: { cellWidth: 10, halign: 'center' }, 
-        2: { cellWidth: 30, fontStyle: 'italic', textColor: 100 },
-        3: { halign: 'right', fontStyle: 'bold' }, 
-        4: { halign: 'right' }, 
-        5: { cellWidth: 20, halign: 'center' } 
-      }
+      columnStyles: { 0: { cellWidth: 10, halign: 'center' }, 2: { cellWidth: 30, fontStyle: 'italic', textColor: 100 }, 3: { halign: 'right', fontStyle: 'bold' }, 4: { halign: 'right' }, 5: { cellWidth: 20, halign: 'center' } }
     });
     
     const finalY = (doc as any).lastAutoTable.finalY + 20;
@@ -239,7 +241,6 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
     doc.save(`BatchRecord_${name}_v${version}.pdf`);
   };
 
-  // --- RENDER ---
   if (view === 'list') {
     return (
       <div className="flex-1 flex flex-col bg-background-light dark:bg-background-dark pb-24 h-screen">
@@ -267,7 +268,6 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
             const isStack = versions.length > 1;
             const isExpanded = expandedGroup === name;
 
-            // EXPANDED VIEW (Show all versions in this group)
             if (isExpanded) {
               return (
                 <div key={name} className="col-span-full bg-slate-100 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3 animate-slideUp">
@@ -276,11 +276,7 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
                      <button onClick={() => setExpandedGroup(null)} className="text-xs font-bold text-primary bg-white dark:bg-slate-800 px-3 py-1 rounded-full shadow-sm">Close Stack</button>
                   </div>
                   {versions.map(ver => (
-                    <button 
-                      key={ver.id} 
-                      onClick={() => handleEdit(ver)}
-                      className="w-full flex justify-between items-center bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-primary transition-all text-left group active:scale-[0.99]"
-                    >
+                    <button key={ver.id} onClick={() => handleEdit(ver)} className="w-full flex justify-between items-center bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-primary transition-all text-left group active:scale-[0.99]">
                       <div>
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-xs font-bold text-primary bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-md">v{ver.version}</span>
@@ -295,17 +291,13 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
               );
             }
 
-            // COLLAPSED VIEW (Show only top card)
             return (
               <button 
                 key={name} 
                 onClick={() => isStack ? setExpandedGroup(name) : handleEdit(latest)}
                 className="relative bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-primary transition-all text-left group active:scale-[0.98]"
               >
-                {/* Stack Effect Behind */}
-                {isStack && (
-                   <div className="absolute -bottom-1 left-2 right-2 h-4 bg-slate-200 dark:bg-slate-800 rounded-b-xl -z-10"></div>
-                )}
+                {isStack && <div className="absolute -bottom-1 left-2 right-2 h-4 bg-slate-200 dark:bg-slate-800 rounded-b-xl -z-10"></div>}
                 
                 <div className="flex justify-between items-start mb-2">
                   <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${latest.status === 'Approved' ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
@@ -332,19 +324,15 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
               </button>
             );
           })}
-          
-          {Object.keys(groupedRecipes).length === 0 && (
-             <div className="col-span-full text-center py-10 text-slate-400">No formulas found for "{searchTerm}"</div>
-          )}
+          {Object.keys(groupedRecipes).length === 0 && <div className="col-span-full text-center py-10 text-slate-400">No formulas found for "{searchTerm}"</div>}
         </div>
       </div>
     );
   }
 
-  // EDIT VIEW
+  // (Editor View Code remains the same as provided previously...)
   return (
     <div className="flex-1 flex flex-col bg-background-light dark:bg-background-dark h-screen pb-24">
-      {/* Header */}
       <header className="p-4 bg-white dark:bg-card-dark border-b border-slate-200 dark:border-slate-800 flex justify-between items-center shrink-0">
         <button onClick={() => setView('list')} className="size-10 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-transform active:scale-95">
           <span className="material-symbols-outlined">arrow_back</span>
@@ -363,7 +351,6 @@ const Formulator: React.FC<FormulatorProps> = ({ onBack, autoCreate, userName })
         </div>
       </header>
 
-      {/* Editor Body */}
       <main className="flex-1 overflow-auto p-4 space-y-6">
         <section className="bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
           <div className="grid grid-cols-2 gap-4 mb-4">
