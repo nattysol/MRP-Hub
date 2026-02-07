@@ -60,7 +60,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate, role }) => {
       <header className="mb-8 flex items-center gap-4">
         <div className="size-12 bg-white dark:bg-card-dark rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 flex items-center justify-center p-2">
             <img 
-              src="/logo.png" 
+              src="/logo.svg" 
               alt="NS" 
               className="w-full h-full object-contain"
               onError={(e) => {
