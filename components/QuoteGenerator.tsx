@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, onSnapshot, query, orderBy, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Recipe, Ingredient, PackagingItem, Product, Quote } from '../types';
 import jsPDF from 'jspdf';
@@ -21,19 +21,21 @@ interface QuoteResult {
   totalCogsPerUnit: number;
   totalCogs: number;
   recommendedPrice: number;
+  margin: number;
 }
 
 const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, userName }) => {
   const [view, setView] = useState<'list' | 'create'>(autoCreate ? 'create' : 'list');
   const [quoteSearch, setQuoteSearch] = useState('');
-  const [quotes, setQuotes] = useState<any[]>([]); // Using any[] to accommodate new 'version' field dynamically
+  const [quotes, setQuotes] = useState<any[]>([]);
 
   // Stacking State
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
 
   // Form State
+  const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
   const [clientName, setClientName] = useState('');
-  const [version, setVersion] = useState(1); // Track version
+  const [version, setVersion] = useState(1);
   
   // Selections
   const [selectedProductId, setSelectedProductId] = useState('');
@@ -81,33 +83,26 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
   // --- GROUPING & STACKING LOGIC ---
   const groupedQuotes = useMemo(() => {
     const groups: { [key: string]: any[] } = {};
-    
-    // Filter
     const filtered = quotes.filter(q => {
       if (!quoteSearch) return true;
       const lower = quoteSearch.toLowerCase();
       return q.client_name.toLowerCase().includes(lower) || q.product_name.toLowerCase().includes(lower);
     });
-
-    // Group by "Client - Product"
     filtered.forEach(q => {
       const key = `${q.client_name}||${q.product_name}`;
       if (!groups[key]) groups[key] = [];
       groups[key].push(q);
     });
-
-    // Sort by Version (High to Low)
     Object.keys(groups).forEach(key => {
       groups[key].sort((a, b) => (b.version || 0) - (a.version || 0));
     });
-
     return groups;
   }, [quotes, quoteSearch]);
 
 
   // --- HANDLERS ---
-
   const resetForm = () => {
+    setEditingQuoteId(null);
     setClientName('');
     setVersion(1);
     setSelectedProductId('');
@@ -130,7 +125,6 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
       setSelectedClosureId(prod.closure_id || '');
       setSelectedLabelId(prod.label_id || '');
       setSelectedBoxId(prod.box_id || '');
-      
       if (!clientName) {
          const r = recipes.find(rec => rec.id === prod.recipe_id);
          if (r && r.project) setClientName(r.project);
@@ -140,12 +134,10 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
 
   const handleLoadQuote = (q: any) => {
     setClientName(q.client_name || '');
-    // If loading an existing quote, the next save will be version + 1
     setVersion((q.version || 1) + 1);
     
     setSelectedProductId(q.product_id || '');
     setSelectedRecipeId(q.recipe_id || '');
-    
     setSelectedContainerId(q.container_id || '');
     setSelectedClosureId(q.closure_id || '');
     setSelectedLabelId(q.label_id || '');
@@ -154,7 +146,6 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
     setTier1(q.tier1_units || 1000);
     setTier2(q.tier2_units || 5000);
     setTier3(q.tier3_units || 10000);
-
     setView('create');
   };
 
@@ -168,52 +159,65 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
   const boxes = useMemo(() => packagingOptions.filter(p => p.category === 'Box'), [packagingOptions]);
   const selectedRecipe = useMemo(() => recipes.find(r => r.id === selectedRecipeId), [recipes, selectedRecipeId]);
 
-  const currentPackagingCost = useMemo(() => {
-    let total = 0;
-    if (selectedContainerId) total += packaging.find(p => p.id === selectedContainerId)?.unit_price || 0;
-    if (selectedClosureId) total += packaging.find(p => p.id === selectedClosureId)?.unit_price || 0;
-    if (selectedLabelId) total += packaging.find(p => p.id === selectedLabelId)?.unit_price || 0;
-    if (selectedBoxId) total += packaging.find(p => p.id === selectedBoxId)?.unit_price || 0;
-    return total;
-  }, [packaging, selectedContainerId, selectedClosureId, selectedLabelId, selectedBoxId]);
+  const costs = useMemo(() => {
+    // 1. Ingredients
+    let material = 0;
+    if (selectedRecipe) {
+        selectedRecipe.ingredients.forEach(ri => {
+        const ing = ingredients.find(i => i.id === ri.ingredient_id);
+        if (ing) material += (ri.percentage / 100) * (ing.cost_per_gram || 0);
+        });
+    }
+    const product = products.find(p => p.id === selectedProductId);
+    const unitSize = product?.net_weight || selectedRecipe?.unit_size_g || 0;
+    const materialCost = material * unitSize;
+
+    // 2. Packaging
+    let pack = 0;
+    if (selectedContainerId) pack += packaging.find(p => p.id === selectedContainerId)?.unit_price || 0;
+    if (selectedClosureId) pack += packaging.find(p => p.id === selectedClosureId)?.unit_price || 0;
+    if (selectedLabelId) pack += packaging.find(p => p.id === selectedLabelId)?.unit_price || 0;
+    if (selectedBoxId) pack += packaging.find(p => p.id === selectedBoxId)?.unit_price || 0;
+
+    return {
+        material: materialCost,
+        packaging: pack,
+        labor: LABOR_PER_UNIT,
+        overhead: OVERHEAD_PER_UNIT,
+        total: materialCost + pack + LABOR_PER_UNIT + OVERHEAD_PER_UNIT
+    };
+  }, [selectedRecipe, products, selectedProductId, ingredients, packaging, selectedContainerId, selectedClosureId, selectedLabelId, selectedBoxId]);
 
   const generateQuote = (units: number): QuoteResult | null => {
     if (!selectedRecipe) return null;
-    let materialCostPerGram = 0;
-    selectedRecipe.ingredients.forEach(ri => {
-      const ing = ingredients.find(i => i.id === ri.ingredient_id);
-      if (ing) materialCostPerGram += (ri.percentage / 100) * (ing.cost_per_gram || 0);
-    });
-    const product = products.find(p => p.id === selectedProductId);
-    const unitSize = product?.net_weight || selectedRecipe.unit_size_g;
-    const materialCostPerUnit = materialCostPerGram * unitSize;
-    const totalCogsPerUnit = materialCostPerUnit + currentPackagingCost + LABOR_PER_UNIT + OVERHEAD_PER_UNIT;
+    const totalCogsPerUnit = costs.total;
     const recommendedPrice = totalCogsPerUnit / MARGIN_DIVISOR;
     return {
-      units, materialCostPerUnit, packagingCostPerUnit: currentPackagingCost, laborPerUnit: LABOR_PER_UNIT, overheadPerUnit: OVERHEAD_PER_UNIT, totalCogsPerUnit, totalCogs: totalCogsPerUnit * units, recommendedPrice
+      units, 
+      materialCostPerUnit: costs.material, 
+      packagingCostPerUnit: costs.packaging, 
+      laborPerUnit: costs.labor, 
+      overheadPerUnit: costs.overhead, 
+      totalCogsPerUnit, 
+      totalCogs: totalCogsPerUnit * units, 
+      recommendedPrice,
+      margin: ((recommendedPrice - totalCogsPerUnit) / recommendedPrice) * 100
     };
   };
 
   const results = { t1: generateQuote(tier1), t2: generateQuote(tier2), t3: generateQuote(tier3) };
-
-  // --- SAVE & PDF ---
 
   const handleSaveQuote = async () => {
     if (!clientName || !selectedProductId || !results.t1) return alert("Missing Info");
     setIsSaving(true);
     try {
       const product = products.find(p => p.id === selectedProductId);
-      
-      // Calculate Version: Check existing quotes to see if we need to bump version
-      // If we loaded a quote, 'version' state is already (prev + 1).
-      // If it's brand new, 'version' is 1.
-      
       const payload = {
         date: new Date().toISOString(),
         client_name: clientName,
         product_name: product?.name || 'Unknown',
         product_sku: product?.sku || 'N/A',
-        version: version, // Save the version
+        version: version,
         
         selected_tier_units: tier1,
         selected_tier_price: results.t1.recommendedPrice,
@@ -231,7 +235,6 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
         updated_at: serverTimestamp()
       };
 
-      // ALWAYS CREATE NEW (History Stacking)
       await addDoc(collection(db, 'quotes'), {
         ...payload,
         quote_number: `Q-${Math.floor(Math.random() * 10000)}`,
@@ -239,7 +242,7 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
       });
       
       alert(`Quote v${version} Saved Successfully`);
-      setExpandedGroup(null); // Reset UI
+      setExpandedGroup(null);
     } catch (e) {
       console.error(e);
       alert("Error saving");
@@ -278,7 +281,7 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
     doc.setTextColor(100);
     doc.text(`Client: ${clientName}`, 14, 51);
     doc.text(`SKU: ${product?.sku || 'N/A'}`, 14, 56);
-    doc.text(`Version: v${version}`, 14, 61); // Add Version to PDF
+    doc.text(`Version: v${version}`, 14, 61);
 
     autoTable(doc, {
       startY: 70,
@@ -292,7 +295,6 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
       headStyles: { fillColor: [79, 70, 229], halign: 'center' },
     });
 
-    // Pkg Specs
     const getPkgName = (id: string) => packaging.find(p => p.id === id)?.name || 'Not Selected';
     const getPkgVendor = (id: string) => {
       const v = packaging.find(p => p.id === id)?.vendor;
@@ -322,7 +324,6 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
       styles: { fontSize: 9 }
     });
 
-    // Formula Breakdown
     finalY = (doc as any).lastAutoTable.finalY + 15;
     doc.setFontSize(12);
     doc.setTextColor(0);
@@ -345,7 +346,6 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
     doc.save(`Quote_${prodName}_v${version}.pdf`);
   };
 
-  // --- VIEW: LIST (STACKED) ---
   if (view === 'list') {
     return (
       <div className="flex-1 flex flex-col bg-background-light dark:bg-background-dark pb-24 min-h-screen">
@@ -368,7 +368,6 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
             const isStack = versions.length > 1;
             const isExpanded = expandedGroup === key;
 
-            // EXPANDED VIEW
             if (isExpanded) {
               return (
                 <div key={key} className="bg-slate-100 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3 animate-slideUp">
@@ -377,11 +376,7 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
                      <button onClick={() => setExpandedGroup(null)} className="text-xs font-bold text-primary bg-white dark:bg-slate-800 px-3 py-1 rounded-full shadow-sm">Close Stack</button>
                   </div>
                   {versions.map(v => (
-                    <button 
-                      key={v.id} 
-                      onClick={() => handleLoadQuote(v)}
-                      className="w-full flex justify-between items-center bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-primary transition-all text-left group active:scale-[0.99]"
-                    >
+                    <button key={v.id} onClick={() => handleLoadQuote(v)} className="w-full flex justify-between items-center bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-primary transition-all text-left group active:scale-[0.99]">
                       <div>
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-xs font-bold text-primary bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-md">v{v.version || 1}</span>
@@ -396,24 +391,15 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
               );
             }
 
-            // COLLAPSED VIEW
             return (
-              <button 
-                key={key} 
-                onClick={() => isStack ? setExpandedGroup(key) : handleLoadQuote(latest)}
-                className="w-full relative bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-primary transition-all text-left group active:scale-[0.98]"
-              >
-                {/* Stack Effect */}
+              <button key={key} onClick={() => isStack ? setExpandedGroup(key) : handleLoadQuote(latest)} className="w-full relative bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-primary transition-all text-left group active:scale-[0.98]">
                 {isStack && <div className="absolute -bottom-1 left-2 right-2 h-4 bg-slate-200 dark:bg-slate-800 rounded-b-xl -z-10"></div>}
-                
                 <div className="flex justify-between items-center">
                    <div>
                      <div className="flex items-center gap-2 mb-1">
                        <p className="text-[10px] font-bold text-slate-400 uppercase">{client}</p>
                        {isStack ? (
-                          <span className="text-[10px] font-bold text-white bg-slate-400 px-1.5 py-0.5 rounded-md flex items-center gap-1">
-                            <span className="material-symbols-outlined text-[10px]">filter_none</span>{versions.length}
-                          </span>
+                          <span className="text-[10px] font-bold text-white bg-slate-400 px-1.5 py-0.5 rounded-md flex items-center gap-1"><span className="material-symbols-outlined text-[10px]">filter_none</span>{versions.length}</span>
                        ) : (
                           <span className="text-[10px] font-bold text-primary bg-indigo-50 dark:bg-indigo-900/30 px-1.5 py-0.5 rounded-md">v{latest.version || 1}</span>
                        )}
@@ -421,10 +407,7 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
                      <h3 className="font-bold text-slate-800 dark:text-white">{prod}</h3>
                      <p className="text-xs text-slate-500">SKU: {latest.product_sku}</p>
                    </div>
-                   <div className="text-right">
-                     <p className="text-sm font-black text-primary">${latest.selected_tier_price.toFixed(2)} / unit</p>
-                     <p className="text-[10px] text-slate-400">Est. Total: ${(latest.selected_tier_units * latest.selected_tier_price).toLocaleString()}</p>
-                   </div>
+                   <div className="text-right"><p className="text-sm font-black text-primary">${latest.selected_tier_price.toFixed(2)} / unit</p><p className="text-[10px] text-slate-400">Est. Total: ${(latest.selected_tier_units * latest.selected_tier_price).toLocaleString()}</p></div>
                 </div>
               </button>
             );
@@ -455,8 +438,24 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
           <div className="flex items-center gap-2 mb-4"><span className="material-symbols-outlined text-primary">grid_view</span><h3 className="text-sm font-bold uppercase tracking-wider text-slate-500">Select Product</h3></div>
           <SearchableSelect label="Product SKU" placeholder="Search saved products..." options={productOptions} value={selectedProductId} onChange={handleProductSelect} />
         </section>
+
+        {/* --- FULL COGS BREAKDOWN --- */}
         <section className="bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
-          <div className="flex justify-between items-center mb-4"><h3 className="text-sm font-bold uppercase text-slate-500">Packaging</h3><span className="text-sm font-bold text-emerald-500">${currentPackagingCost.toFixed(2)}/u</span></div>
+           <div className="flex justify-between items-center mb-4">
+              <h3 className="text-sm font-bold uppercase text-slate-500">COGS Breakdown</h3>
+              <span className="text-sm font-black text-emerald-500">${costs.total.toFixed(2)} <span className="text-[10px] text-slate-400 font-normal">/ unit</span></span>
+           </div>
+           <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="flex justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"><span>Ingredients</span><span className="font-bold">${costs.material.toFixed(2)}</span></div>
+              <div className="flex justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"><span>Packaging</span><span className="font-bold">${costs.packaging.toFixed(2)}</span></div>
+              <div className="flex justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"><span>Labor</span><span className="font-bold">${costs.labor.toFixed(2)}</span></div>
+              <div className="flex justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"><span>Overhead</span><span className="font-bold">${costs.overhead.toFixed(2)}</span></div>
+           </div>
+        </section>
+
+        {/* Packaging Selectors */}
+        <section className="bg-white dark:bg-card-dark p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
+          <h3 className="text-sm font-bold uppercase text-slate-500 mb-4">Packaging Setup</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
              <SearchableSelect label="Container" options={containers} value={selectedContainerId} onChange={setSelectedContainerId} />
              <SearchableSelect label="Closure" options={closures} value={selectedClosureId} onChange={setSelectedClosureId} />
@@ -464,6 +463,7 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
              <SearchableSelect label="Box" options={boxes} value={selectedBoxId} onChange={setSelectedBoxId} />
           </div>
         </section>
+
         <section>
           <div className="grid grid-cols-3 gap-3">
             <div className="flex flex-col"><span className="text-[10px] font-bold text-slate-400 mb-1 text-center uppercase">Tier 1</span><input className="w-full rounded-xl text-center font-black text-primary border border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark h-12 p-2" type="number" value={tier1} onChange={(e) => setTier1(Number(e.target.value))}/></div>
@@ -473,7 +473,7 @@ const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ onBack, autoCreate, use
         </section>
         {selectedRecipe && (
           <div className="rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark shadow-sm">
-             <div className="grid grid-cols-12 gap-2 bg-slate-50 dark:bg-slate-800/50 p-3 text-[10px] font-bold text-slate-500 border-b border-slate-200 dark:border-slate-700 uppercase"><div className="col-span-3">Units</div><div className="col-span-3 text-right">Total</div><div className="col-span-3 text-right">Unit</div><div className="col-span-3 text-right text-primary">Price</div></div>
+             <div className="grid grid-cols-12 gap-2 bg-slate-50 dark:bg-slate-800/50 p-3 text-[10px] font-bold text-slate-500 border-b border-slate-200 dark:border-slate-700 uppercase"><div className="col-span-3">Units</div><div className="col-span-3 text-right">Margin</div><div className="col-span-3 text-right">Unit</div><div className="col-span-3 text-right text-primary">Price</div></div>
              <QuoteRow result={results.t1} />
              <QuoteRow result={results.t2} highlighted />
              <QuoteRow result={results.t3} />
@@ -495,7 +495,8 @@ const QuoteRow = ({ result, highlighted }: { result: QuoteResult | null, highlig
     <div className={`grid grid-cols-12 gap-2 p-4 items-center border-b border-slate-100 dark:border-slate-800 last:border-0 ${highlighted ? 'bg-primary/5 dark:bg-primary/10 relative' : ''}`}>
       {highlighted && <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary"></div>}
       <div className={`col-span-3 font-bold text-sm ${highlighted ? 'text-primary' : 'text-slate-700 dark:text-slate-300'}`}>{result.units.toLocaleString()}</div>
-      <div className="col-span-3 text-right"><p className="text-xs font-semibold text-slate-700 dark:text-slate-300">${result.totalCogs.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p></div>
+      {/* Show Margin % instead of Total Cost */}
+      <div className="col-span-3 text-right"><p className={`text-xs font-bold ${result.margin < 30 ? 'text-red-500' : 'text-emerald-500'}`}>{result.margin.toFixed(0)}%</p></div>
       <div className="col-span-3 text-right"><p className="text-[10px] text-slate-400">${result.totalCogsPerUnit.toFixed(2)}</p></div>
       <div className="col-span-3 text-right"><p className={`font-black text-base ${highlighted ? 'text-primary' : 'text-slate-900 dark:text-white'}`}>${result.recommendedPrice.toFixed(2)}</p></div>
     </div>
